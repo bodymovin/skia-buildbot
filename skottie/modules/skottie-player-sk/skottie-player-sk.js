@@ -192,6 +192,15 @@ define('skottie-player-sk', class extends HTMLElement {
     return this._state.duration * (this._state.currentSegment.t1 - this._state.currentSegment.t0);
   }
 
+  fps() {
+    return this._state.nativeFps;
+  }
+
+  canvas() {
+    // TODO: find a better way to get the canvas element
+    return document.getElementById('skottie');
+  }
+
   seek(t) {
     this._state.timeOrigin = (Date.now() - this.duration() * t);
 
