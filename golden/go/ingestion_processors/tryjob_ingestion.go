@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v4/pgxpool"
 	"golang.org/x/oauth2"
 
 	"go.skia.org/infra/go/buildbucket"
@@ -18,7 +19,9 @@ import (
 	"go.skia.org/infra/go/sklog"
 	"go.skia.org/infra/go/vcsinfo"
 	"go.skia.org/infra/golden/go/clstore"
+	"go.skia.org/infra/golden/go/clstore/dualclstore"
 	"go.skia.org/infra/golden/go/clstore/fs_clstore"
+	"go.skia.org/infra/golden/go/clstore/sqlclstore"
 	"go.skia.org/infra/golden/go/code_review"
 	"go.skia.org/infra/golden/go/code_review/gerrit_crs"
 	"go.skia.org/infra/golden/go/code_review/github_crs"
@@ -69,7 +72,7 @@ type goldTryjobProcessor struct {
 // newModularTryjobProcessor returns an ingestion.Processor which is modular and can support
 // different CodeReviewSystems (e.g. "Gerrit", "GitHub") and different ContinuousIntegrationSystems
 // (e.g. "BuildBucket", "CirrusCI"). This particular implementation stores the data in Firestore.
-func newModularTryjobProcessor(ctx context.Context, _ vcsinfo.VCS, config ingestion.Config, client *http.Client) (ingestion.Processor, error) {
+func newModularTryjobProcessor(ctx context.Context, _ vcsinfo.VCS, config ingestion.Config, client *http.Client, db *pgxpool.Pool) (ingestion.Processor, error) {
 	cisNames := strings.Split(config.ExtraParams[continuousIntegrationSystemsParam], ",")
 	if len(cisNames) == 0 {
 		return nil, skerr.Fmt("missing CI system (e.g. 'buildbucket')")
@@ -114,10 +117,12 @@ func newModularTryjobProcessor(ctx context.Context, _ vcsinfo.VCS, config ingest
 		if err != nil {
 			return nil, skerr.Wrapf(err, "could not create client for CRS %q", crsName)
 		}
+		fireCS := fs_clstore.New(fsClient, crsName)
+		sqlCS := sqlclstore.New(db, crsName)
 		reviewSystems = append(reviewSystems, clstore.ReviewSystem{
 			ID:     crsName,
 			Client: crsClient,
-			Store:  fs_clstore.New(fsClient, crsName),
+			Store:  dualclstore.New(sqlCS, fireCS),
 		})
 	}
 
@@ -254,6 +259,7 @@ func (g *goldTryjobProcessor) Process(ctx context.Context, rf ingestion.ResultFi
 		}
 		// This is a new CL, but we'll be storing it to the clstore down below when
 		// we confirm that the TryJob is valid.
+		cl.Updated = time.Time{} // store a sentinel value to CL.
 	} else if err != nil {
 		return skerr.Wrapf(err, "fetching CL from clstore with id %q", clID)
 	}
@@ -297,15 +303,21 @@ func (g *goldTryjobProcessor) Process(ctx context.Context, rf ingestion.ResultFi
 	} else if err != nil {
 		return skerr.Wrapf(err, "fetching TryJob with id %s", tjID)
 	}
+	// In the SQL implementation, we need to create the CL first because of foreign key constraints.
+	if cl.Updated.IsZero() {
+		sklog.Debugf("First time seeing CL %s_%s", system.ID, cl.SystemID)
+		if err = system.Store.PutChangelist(ctx, cl); err != nil {
+			return skerr.Wrapf(err, "initially storing %s CL with id %q to clstore", system.ID, clID)
+		}
+	}
 
 	defer shared.NewMetricsTimer("put_tryjobstore_entries").Stop()
-
 	// Store the results from the file.
 	tjr := toTryJobResults(gr)
 	if err := system.Store.PutPatchset(ctx, ps); err != nil {
-		return skerr.Wrapf(err, "could not store PS %s of CL %q to clstore", psID, clID)
+		return skerr.Wrapf(err, "could not store PS %s of %s CL %q to clstore", psID, system.ID, clID)
 	}
-	err = g.tryJobStore.PutResults(ctx, combinedID, tjID, cisName, tjr, time.Now())
+	err = g.tryJobStore.PutResults(ctx, combinedID, tjID, cisName, rf.Name(), tjr, time.Now())
 	if err != nil {
 		return skerr.Wrapf(err, "putting %d results for CL %s, PS %d (%s), TJ %s, file %s", len(tjr), clID, psOrder, psID, tjID, rf.Name())
 	}
@@ -315,7 +327,7 @@ func (g *goldTryjobProcessor) Process(ctx context.Context, rf ingestion.ResultFi
 	// period.
 	cl.Updated = time.Now()
 	if err = system.Store.PutChangelist(ctx, cl); err != nil {
-		return skerr.Wrapf(err, "updating CL with id %q to clstore", clID)
+		return skerr.Wrapf(err, "updating %s CL with id %q to clstore", system.ID, clID)
 	}
 	return nil
 }

@@ -48,6 +48,26 @@ func validateConfig(ctx context.Context, f string) (string, error) {
 			return fmt.Errorf("Failed to read %s: %s", f, err)
 		}
 
+		// Validate the config. We do this before the below checks, because
+		// Validate() formerly propagated some shared configuration entries
+		// downward, and we want to ensure that they are now included as part
+		// of the config file.
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("%s failed validation: %s", f, err)
+		}
+
+		// Write the config back to the file. This is temporary.
+		/*if err := util.WithWriteFile(f, func(w io.Writer) error {
+					w.Write([]byte(`// See https://skia.googlesource.com/buildbot.git/+show/master/autoroll/go/roller/config.go#130
+		// for documentation of the autoroller config.
+		`))
+					enc := json.NewEncoder(w)
+					enc.SetIndent("", "  ")
+					return enc.Encode(&cfg)
+				}); err != nil {
+					return skerr.Wrap(err)
+				}*/
+
 		// Re-encode the config back to JSON. Note that the encoder respects
 		// struct field ordering, whereas it sorts map keys; in order to obtain
 		// a comparable JSON encoding, we'll have to decode it again into a map,
@@ -94,11 +114,43 @@ func validateConfig(ctx context.Context, f string) (string, error) {
 			return skerr.Fmt("Config file %q contains unused keys:\n%s", f, diff)
 		}
 
-		// Validate the config. We do this after the above checks, because
-		// Validate() may propagate some shared configuration entries downward,
-		// and that would cause the above comparison to fail.
-		if err := cfg.Validate(); err != nil {
-			return fmt.Errorf("%s failed validation: %s", f, err)
+		// Convert the config to the proto version and back, ensuring that we
+		// get the same config.
+		proto, err := roller.AutoRollerConfigToProto(&cfg)
+		if err != nil {
+			return skerr.Wrap(err)
+		}
+		// Use the same JSON trick as above.
+		actualProtoConv, err := roller.ProtoToConfig(proto)
+		if err != nil {
+			return skerr.Wrap(err)
+		}
+		b, err := json.Marshal(actualProtoConv)
+		if err != nil {
+			return skerr.Wrap(err)
+		}
+		m = nil
+		if err := json.Unmarshal(b, &m); err != nil {
+			return skerr.Wrap(err)
+		}
+		actualBytes, err = json.MarshalIndent(m, "", "  ")
+		if err != nil {
+			return skerr.Wrap(err)
+		}
+		actual = string(actualBytes)
+		if actual != expected {
+			diff, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
+				A:        difflib.SplitLines(expected),
+				B:        difflib.SplitLines(actual),
+				FromFile: "Expected",
+				ToFile:   "Actual",
+				Context:  3,
+				Eol:      "\n",
+			})
+			if err != nil {
+				return skerr.Wrap(err)
+			}
+			return skerr.Fmt("Config file %q contains unused keys:\n%s", f, diff)
 		}
 
 		rollerName = cfg.RollerName
@@ -141,7 +193,7 @@ func main() {
 	for _, f := range configFiles {
 		rollerName, err := validateConfig(ctx, f)
 		if err != nil {
-			td.Fatal(ctx, err)
+			td.Fatalf(ctx, "%s failed validation: %s", f, err)
 		}
 		if otherFile, ok := rollers[rollerName]; ok {
 			td.Fatalf(ctx, "Roller %q is defined in both %s and %s", rollerName, f, otherFile)

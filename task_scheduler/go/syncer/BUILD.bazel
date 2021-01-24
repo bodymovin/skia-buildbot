@@ -1,4 +1,5 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+load("//bazel/go:go_test.bzl", "go_test")
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "syncer",
@@ -19,7 +20,11 @@ go_library(
 
 go_test(
     name = "syncer_test",
-    srcs = ["syncer_test.go"],
+    srcs = [
+        "syncer_manual_test.go",
+        "syncer_test.go",
+    ],
+    data = ["//infra/config:recipes.cfg"],
     embed = [":syncer"],
     deps = [
         "//go/depot_tools/testutils",

@@ -1,7 +1,11 @@
 package datakitchensink
 
 import (
+	"path/filepath"
+	"time"
+
 	"go.skia.org/infra/go/paramtools"
+	"go.skia.org/infra/go/repo_root"
 	"go.skia.org/infra/golden/go/sql/databuilder"
 	"go.skia.org/infra/golden/go/sql/schema"
 	"go.skia.org/infra/golden/go/types"
@@ -113,7 +117,7 @@ func Build() schema.Tables {
 
 	// iPad traces had a bug fix and a bug introduced at commit 7.
 	b.AddTracesWithCommonKeys(paramtools.Params{
-		OSKey:     ApplePhoneOS,
+		OSKey:     IOS,
 		DeviceKey: IPadDevice,
 	}).History(
 		"AAAAAAAAAA",
@@ -139,7 +143,7 @@ func Build() schema.Tables {
 	// are slow and thus have sparse data. We do this by saying the RGB data is missing on every
 	// other commit and the GREY data is missing on two commits out of three.
 	b.AddTracesWithCommonKeys(paramtools.Params{
-		OSKey:        ApplePhoneOS,
+		OSKey:        IOS,
 		DeviceKey:    IPhoneDevice,
 		ColorModeKey: RGBColorMode,
 	}).History(
@@ -156,7 +160,7 @@ func Build() schema.Tables {
 				"", "2020-12-08T07:31:00Z", "", "2020-12-10T07:31:00Z", ""})
 
 	b.AddTracesWithCommonKeys(paramtools.Params{
-		OSKey:        ApplePhoneOS,
+		OSKey:        IOS,
 		DeviceKey:    IPhoneDevice,
 		ColorModeKey: GreyColorMode,
 	}).History(
@@ -279,7 +283,7 @@ func Build() schema.Tables {
 	cl := b.AddChangelist(ChangelistIDThatAttemptsToFixIOS, GerritCRS, UserOne, "Fix iOS", schema.StatusOpen)
 	ps := cl.AddPatchset(PatchSetIDFixesIPadButNotIPhone, "ffff111111111111111111111111111111111111", 3)
 	ps.DataWithCommonKeys(paramtools.Params{
-		OSKey: ApplePhoneOS, DeviceKey: IPhoneDevice, ColorModeKey: RGBColorMode,
+		OSKey: IOS, DeviceKey: IPhoneDevice, ColorModeKey: RGBColorMode,
 	}).Digests(DigestA01Pos, // same as primary branch
 		DigestB01Pos,    // same as primary branch
 		DigestC07Unt_CL, // Newly seen digest (still not correct).
@@ -288,9 +292,9 @@ func Build() schema.Tables {
 		{types.CorpusField: CornersCorpus, types.PrimaryKeyField: TriangleTest},
 		{types.CorpusField: RoundCorpus, types.PrimaryKeyField: CircleTest},
 	}).OptionsAll(paramtools.Params{"ext": "png"}).
-		FromTryjob(Tryjob01IPhoneRGB, BuildBucketCIS, "Test-iPhone-RGB", TryjobFile01IPhoneRGB, "2020-12-10T04:05:06Z")
+		FromTryjob(Tryjob01IPhoneRGB, BuildBucketCIS, "Test-iPhone-RGB", Tryjob01FileIPhoneRGB, "2020-12-10T04:05:06Z")
 	ps.DataWithCommonKeys(paramtools.Params{
-		OSKey: ApplePhoneOS, DeviceKey: IPadDevice,
+		OSKey: IOS, DeviceKey: IPadDevice,
 	}).Digests(DigestA01Pos, // same as primary branch
 		DigestB01Pos,    // on this CL, the digest has been (incorrectly) marked as untriaged.
 		DigestC06Pos_CL, // not on primary branch, triaged on CL.
@@ -421,9 +425,19 @@ func Build() schema.Tables {
 			types.CorpusField: RoundCorpus, types.PrimaryKeyField: RoundRectTest,
 		}).Triage(DigestE03Unt_CL, schema.LabelNegative, schema.LabelUntriaged)
 
-	b.ComputeDiffMetricsFromImages("img", "2020-12-12T12:12:12Z")
+	b.ComputeDiffMetricsFromImages(getImgDirectory(), "2020-12-12T12:12:12Z")
 
 	return b.Build()
+}
+
+// getImgDirectory returns the path to the img directory in this folder that is friendly to both
+// `go test` and `bazel test`.
+func getImgDirectory() string {
+	root, err := repo_root.Get()
+	if err != nil {
+		panic(err)
+	}
+	return filepath.Join(root, "golden", "go", "sql", "datakitchensink", "img")
 }
 
 const (
@@ -486,7 +500,7 @@ const (
 	OSKey        = "os"
 
 	AndroidOS       = "Android"
-	ApplePhoneOS    = "iOS"
+	IOS             = "iOS"
 	Windows10dot2OS = "Windows10.2"
 	Windows10dot3OS = "Windows10.3"
 
@@ -506,7 +520,7 @@ const (
 	AutoTriageUser = "fuzzy" // we use the algorithm name as the user name for auto triaging.
 
 	GerritCRS         = "gerrit"
-	GerritInternalCRS = "gerrit_internal"
+	GerritInternalCRS = "gerrit-internal"
 
 	BuildBucketCIS         = "buildbucket"
 	BuildBucketInternalCIS = "buildbucketInternal"
@@ -569,10 +583,16 @@ const (
 	TaimenFile9  = "gcs://skia-gold-test/dm-json-v1/2020/12/10/00/0109010901090109010901090109010901090109/waterfall/taimenfile9.json"
 	TaimenFile10 = "gcs://skia-gold-test/dm-json-v1/2020/12/11/00/0110011001100110011001100110011001100110/waterfall/taimenfile10.json"
 
-	TryjobFile01IPhoneRGB = "gcs://skia-gold-test/trybot/dm-json-v1/2020/12/10/04/PS_fixes_ipad_but_not_iphone/iphonergb.json"
+	Tryjob01FileIPhoneRGB = "gcs://skia-gold-test/trybot/dm-json-v1/2020/12/10/04/PS_fixes_ipad_but_not_iphone/iphonergb.json"
 	Tryjob02FileIPad      = "gcs://skia-gold-test/trybot/dm-json-v1/2020/12/10/03/PS_fixes_ipad_but_not_iphone/ipad.json"
 	Tryjob03FileTaimenRGB = "gcs://skia-gold-test/trybot/dm-json-v1/2020/12/10/03/PS_fixes_ipad_but_not_iphone/taimen.json"
 	Tryjob04FileWindows   = "gcs://skia-gold-test/trybot/dm-json-v1/2020/12/12/08/PS_adds_new_corpus/windows.json"
 	Tryjob05FileWindows   = "gcs://skia-gold-test/trybot/dm-json-v1/2020/12/10/09/PS_adds_new_corpus_and_test/windows.json"
 	Tryjob06FileWalleye   = "gcs://skia-gold-test/trybot/dm-json-v1/2020/12/10/09/PS_adds_new_corpus_and_test/walleye.json"
+)
+
+var (
+	Tryjob01LastIngested = time.Date(2020, time.December, 10, 4, 5, 6, 0, time.UTC)
+	Tryjob02LastIngested = time.Date(2020, time.December, 10, 3, 2, 1, 0, time.UTC)
+	Tryjob03LastIngested = time.Date(2020, time.December, 10, 3, 44, 44, 0, time.UTC)
 )

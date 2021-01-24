@@ -1,7 +1,48 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
 load("@bazel_gazelle//:def.bzl", "gazelle")
 load("@com_github_bazelbuild_buildtools//buildifier:def.bzl", "buildifier")
 load("@io_bazel_rules_docker//container:container.bzl", "container_push")
 load("@io_bazel_rules_docker//docker/util:run.bzl", "container_run_and_commit")
+
+# Disable generation of go_proto_library targets. Let Gazelle use checked-in .pb.go files instead.
+#
+# We opt out of this feature for the following reasons:
+#
+# 1) Generated files are invisible to code editors and IDEs, which breaks features such as code
+#    completion, automated refactors, etc. This can be fixed with editor plugins (see
+#    https://github.com/bazelbuild/rules_go/issues/512), but none are available at this time.
+#
+# 2) Leveraging the preexisting, checked-in .pb.go is the fastest way to roll out Bazel as the build
+#    system for our repository, and is the recommended approach for already established projects, or
+#    for projects that also need to build with "go build". See
+#    https://github.com/bazelbuild/rules_go/blob/master/proto/core.rst#option-2-use-pre-generated-pbgo-files.
+#
+# In the future, we might decide to leverage Gazelle's generation of go_proto_library rules. To
+# address point 1) above, a potential approach is to check in any files generated via
+# go_proto_library targets. This works because if there's a source file checked in the repository,
+# and a build target that generates a file of the same name, Bazel will ignore the checked in file
+# and use the generated file instead. To keep the checked in and generated files in sync, a rule
+# such as generated_file_test can be used, as mentioned here:
+# https://github.com/bazelbuild/rules_go/issues/512#issuecomment-747844469.
+#
+# Documentation for this directive: https://github.com/bazelbuild/bazel-gazelle#directives.
+#
+# gazelle:proto disable
+
+# This directive tells Gazelle to use a custom macro instead of rules_go's go_test rule for any
+# Gazelle-generated Go test targets.
+#
+# The custom macro generates separate go_test targets for manual Go tests, which will be tagged as
+# manual. The macro relies on the assumption that any manual test cases will be placed on Go source
+# files ending in "_manual_test.go". This convention is enforced by unittest.ManualTest(). If the
+# test target does not contain any manual test, the custom macro behaves exactly like rules_go's
+# go_test rule.
+#
+# See the macro's docstring for details.
+#
+# Documentation for this directive: https://github.com/bazelbuild/bazel-gazelle#directives.
+#
+# gazelle:map_kind go_test go_test //bazel/go:go_test.bzl
 
 # gazelle:prefix go.skia.org/infra
 gazelle(name = "gazelle")
@@ -23,6 +64,19 @@ buildifier(
 
 # Generates a custom toolchain container for Remote Build Execution which extends the default RBE
 # ubuntu16-04 container with any extra dependencies needed for Skia Infrastructure build targets.
+#
+# This container can be pushed to GCR via the container_push target defined below.
+#
+# Notes:
+#
+#  - This target is tagged with "no-remote" because the container_run_and_commit rule calls the
+#    Docker binary, which requires the Docker daemon to be running. This fails on RBE with error
+#    "Cannot connect to the Docker daemon at [...]. Is the docker daemon running?". By tagging this
+#    target with "no-remote", we tell Bazel to build this target locally, even with --config=remote.
+#
+#  - The output of this rule is a >3GB .tar with the container image, so this target can take
+#    several minutes to build. This is OK because we only need to rebuild this container very
+#    occasionally, and Bazel will cache the output artifact.
 #
 # Reference:
 # https://cloud.google.com/remote-build-execution/docs/create-custom-toolchain#creating_a_custom_toolchain_container
@@ -63,8 +117,13 @@ container_run_and_commit(
         ]),
     ],
     image = "@rbe_ubuntu1604//image",
+    tags = ["no-remote"],
 )
 
+# This target can be used to upload the custom RBE container toolchain to GCR. It will be available
+# as gcr.io/skia-public/rbe-container-skia-infra.
+#
+# Note: this can take several minutes to finish because it will upload a >3GB .tar file to GCR.
 container_push(
     name = "push_rbe_container_skia_infra",
     format = "Docker",
@@ -129,4 +188,26 @@ filegroup(
     name = "~elements-sk",
     srcs = TILDE_ELEMENTS_SK_SCSS,
     visibility = ["//infra-sk:__pkg__"],
+)
+
+go_library(
+    name = "infra_lib",
+    srcs = ["run_unittests.go"],
+    importpath = "go.skia.org/infra",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//go/common",
+        "//go/git",
+        "//go/skerr",
+        "//go/sklog",
+        "//go/testutils/unittest",
+        "//go/timer",
+        "//go/util",
+    ],
+)
+
+go_binary(
+    name = "infra",
+    embed = [":infra_lib"],
+    visibility = ["//visibility:public"],
 )

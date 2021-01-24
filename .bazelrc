@@ -14,6 +14,34 @@
 
 build --workspace_status_command=bazel/get_workspace_status.sh
 
+# Tags such as no-remote and no-cache have no effect without this. See
+# https://github.com/bazelbuild/bazel/issues/8830.
+build --experimental_allow_tags_propagation
+
+# Prevent the following rules_docker error due to incompatibilities with Bazel 4.0.0:
+#
+#     ~/.cache/bazel/[...]/io_bazel_rules_docker/container/push.bzl:34:28:
+#     invalid escape sequence: \{.
+#
+# We should remove this flag once a new release of rules_docker is available.
+build --incompatible_restrict_string_escapes=false
+
+# Pipe through the system's *_EMULATOR_HOST environment variables to Bazel tests.
+build --test_env=DATASTORE_EMULATOR_HOST
+build --test_env=BIGTABLE_EMULATOR_HOST
+build --test_env=PUBSUB_EMULATOR_HOST
+build --test_env=FIRESTORE_EMULATOR_HOST
+build --test_env=COCKROACHDB_EMULATOR_HOST
+
+# Pipe through GOOGLE_APPLICATION_CREDENTIALS for local tests. This breaks test hermeticity, so use
+# judiciously. Most tests that depend on this variable should probably tagged with "no-remote".
+#
+# We clear this variable under build:remote because if set, it will most likely contain a path to a
+# file in the host system, which could potentially point to a nonexisting file within the RBE
+# container when Bazel is invoked with --config=remote.
+build --test_env=GOOGLE_APPLICATION_CREDENTIALS
+build:remote --test_env=GOOGLE_APPLICATION_CREDENTIALS=
+
 # Depending on how many machines are in the remote execution instance, setting
 # this higher can make builds faster by allowing more jobs to run in parallel.
 # Setting it too high can result in jobs that timeout, however, while waiting

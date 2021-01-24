@@ -9,7 +9,8 @@ const Schema = `CREATE TABLE IF NOT EXISTS Changelists (
   status STRING NOT NULL,
   owner_email STRING NOT NULL,
   subject STRING NOT NULL,
-  last_ingested_data TIMESTAMP WITH TIME ZONE NOT NULL
+  last_ingested_data TIMESTAMP WITH TIME ZONE NOT NULL,
+  INDEX system_status_ingested_idx (system, status, last_ingested_data)
 );
 CREATE TABLE IF NOT EXISTS Commits (
   commit_id INT4 PRIMARY KEY,
@@ -61,9 +62,9 @@ CREATE TABLE IF NOT EXISTS IgnoreRules (
   ignore_rule_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   creator_email STRING NOT NULL,
   updated_email STRING NOT NULL,
-  expires TIMESTAMP WITH TIME ZONE,
+  expires TIMESTAMP WITH TIME ZONE NOT NULL,
   note STRING,
-  query JSONB
+  query JSONB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS Options (
   options_id BYTES PRIMARY KEY,
@@ -74,7 +75,10 @@ CREATE TABLE IF NOT EXISTS Patchsets (
   system STRING NOT NULL,
   changelist_id STRING NOT NULL REFERENCES Changelists (changelist_id),
   ps_order INT2 NOT NULL,
-  git_hash STRING NOT NULL
+  git_hash STRING NOT NULL,
+  commented_on_cl BOOL NOT NULL,
+  last_checked_if_comment_necessary TIMESTAMP WITH TIME ZONE NOT NULL,
+  INDEX cl_order_idx (changelist_id, ps_order)
 );
 CREATE TABLE IF NOT EXISTS PrimaryBranchParams (
   start_commit_id INT4,

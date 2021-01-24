@@ -457,12 +457,12 @@ type IgnoreRuleRow struct {
 	// UpdatedEmail is the email address of the user who most recently updated this rule.
 	UpdatedEmail string `sql:"updated_email STRING NOT NULL"`
 	// Expires represents when this rule should be re-evaluated for validity.
-	Expires time.Time `sql:"expires TIMESTAMP WITH TIME ZONE"`
+	Expires time.Time `sql:"expires TIMESTAMP WITH TIME ZONE NOT NULL"`
 	// Note is a comment explaining this rule. It typically links to a bug.
 	Note string `sql:"note STRING"`
 	// Query is a map[string][]string that describe which traces should be ignored.
 	// Note that this can only apply to trace keys, not options.
-	Query paramtools.ReadOnlyParamSet `sql:"query JSONB"`
+	Query paramtools.ReadOnlyParamSet `sql:"query JSONB NOT NULL"`
 }
 
 // ToSQLRow implements the sqltest.SQLExporter interface.
@@ -486,6 +486,10 @@ type ChangelistRow struct {
 	Subject string `sql:"subject STRING NOT NULL"`
 	// LastIngestedData indicates when Gold last saw data for this CL.
 	LastIngestedData time.Time `sql:"last_ingested_data TIMESTAMP WITH TIME ZONE NOT NULL"`
+
+	// This index helps query for recently updated, open CLs. Keep an eye on this index, as it could
+	// lead to hotspotting: https://www.cockroachlabs.com/docs/v20.2/indexes.html#indexing-columns
+	systemStatusIngestedIndex struct{} `sql:"INDEX system_status_ingested_idx (system, status, last_ingested_data)"`
 }
 
 // ToSQLRow implements the sqltest.SQLExporter interface.
@@ -508,12 +512,24 @@ type PatchsetRow struct {
 	// GitHash is the hash associated with the patchset. For many CRS, it is the same as the
 	// unqualified PatchsetID.
 	GitHash string `sql:"git_hash STRING NOT NULL"`
+	// CommentedOnCL keeps track of if Gold has commented on the CL indicating there are digests
+	// that need human attention (e.g. there are non-flaky, untriaged, and unignored digests).
+	// We should comment on a CL at most once per Patchset.
+	CommentedOnCL bool `sql:"commented_on_cl BOOL NOT NULL"`
+	// LastCheckedIfCommentNecessary remembers when we last queried the data for this PS to see
+	// if it needed a comment. It is used to avoid searching the database if there have been
+	// no updates to the CL since the last time we looked.
+	LastCheckedIfCommentNecessary time.Time `sql:"last_checked_if_comment_necessary TIMESTAMP WITH TIME ZONE NOT NULL"`
+
+	clOrderIndex struct{} `sql:"INDEX cl_order_idx (changelist_id, ps_order)"`
 }
 
 // ToSQLRow implements the sqltest.SQLExporter interface.
 func (r PatchsetRow) ToSQLRow() (colNames []string, colData []interface{}) {
-	return []string{"patchset_id", "system", "changelist_id", "ps_order", "git_hash"},
-		[]interface{}{r.PatchsetID, r.System, r.ChangelistID, r.Order, r.GitHash}
+	return []string{"patchset_id", "system", "changelist_id", "ps_order", "git_hash",
+			"commented_on_cl", "last_checked_if_comment_necessary"},
+		[]interface{}{r.PatchsetID, r.System, r.ChangelistID, r.Order, r.GitHash,
+			r.CommentedOnCL, r.LastCheckedIfCommentNecessary}
 }
 
 type TryjobRow struct {
@@ -563,7 +579,8 @@ type SecondaryBranchValueRow struct {
 	// SourceFileID is the MD5 hash of the source file that produced this data point. This is a
 	// foreign key into the SourceFiles table.
 	SourceFileID SourceFileID `sql:"source_file_id BYTES NOT NULL"`
-	// TryjobID corresponds to the tryjob (if any) that produced this data.
+	// TryjobID corresponds to the tryjob (if any) that produced this data. When/if we support
+	// branches, this may be null, e.g. data coming from chrome_m86.
 	TryjobID string `sql:"tryjob_id string"`
 	// By creating the primary key using the shard and the commit_id, we give some data locality
 	// to data from the same trace, but in different commits w/o overloading a single range (if

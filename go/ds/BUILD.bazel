@@ -1,4 +1,5 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+load("//bazel/go:go_test.bzl", "go_test")
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "ds",
@@ -19,7 +20,10 @@ go_library(
 
 go_test(
     name = "ds_test",
-    srcs = ["ds_test.go"],
+    srcs = [
+        "ds_manual_test.go",
+        "ds_test.go",
+    ],
     embed = [":ds"],
     deps = [
         "//go/testutils/unittest",

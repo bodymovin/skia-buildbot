@@ -32,7 +32,7 @@ func validBaseConfig() *AutoRollerConfig {
 		ParentWaterfall:   "parentWaterfall",
 		RollerName:        "test-roller",
 		ServiceAccount:    "test-account@google.com",
-		Sheriff:           []string{"sheriff@gmail.com"},
+		Sheriff:           []string{"reviewer@gmail.com"},
 		Gerrit: &codereview.GerritConfig{
 			URL:     "https://gerrit",
 			Project: "my/project",
@@ -139,6 +139,11 @@ func TestConfigs(t *testing.T) {
 					ParentBranch: mainTmpl,
 					ParentRepo:   "fake",
 				},
+			},
+			Gerrit: &codereview.GerritConfig{
+				URL:     "fake-gerrit-url",
+				Project: "fake-gerrit-project",
+				Config:  codereview.GERRIT_CONFIG_CHROMIUM,
 			},
 			ChildRepo: "fake",
 		}

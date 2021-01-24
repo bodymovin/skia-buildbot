@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"go.skia.org/infra/autoroll/go/codereview"
+	"go.skia.org/infra/autoroll/go/config"
 	"go.skia.org/infra/autoroll/go/config_vars"
 	"go.skia.org/infra/autoroll/go/repo_manager/child"
 	"go.skia.org/infra/autoroll/go/repo_manager/common/git_common"
@@ -21,8 +22,9 @@ import (
 // GithubDEPSRepoManagerConfig provides configuration for the Github RepoManager.
 type GithubDEPSRepoManagerConfig struct {
 	DepotToolsRepoManagerConfig
-	ChildRepo   string `json:"childRepo"`
-	ForkRepoURL string `json:"forkRepoURL"`
+	GitHub      *codereview.GithubConfig `json:"github,omitempty"`
+	ChildRepo   string                   `json:"childRepo"`
+	ForkRepoURL string                   `json:"forkRepoURL"`
 	// Optional config to use if parent path is different than
 	// workdir + parent repo.
 	GithubParentPath string `json:"githubParentPath,omitempty"`
@@ -33,7 +35,7 @@ type GithubDEPSRepoManagerConfig struct {
 	TransitiveDeps []*version_file_common.TransitiveDepConfig `json:"transitiveDeps,omitempty"`
 }
 
-// Validate the config.
+// Validate implements util.Validator.
 func (c *GithubDEPSRepoManagerConfig) Validate() error {
 	_, _, err := c.splitParentChild()
 	if err != nil {
@@ -49,7 +51,7 @@ func (c *GithubDEPSRepoManagerConfig) Validate() error {
 // parent.DEPSLocalConfig and a child.GitCheckoutConfig.
 // TODO(borenet): Update the config format to directly define the parent
 // and child. We shouldn't need most of the New.*RepoManager functions.
-func (c GithubDEPSRepoManagerConfig) splitParentChild() (parent.DEPSLocalConfig, child.GitCheckoutConfig, error) {
+func (c GithubDEPSRepoManagerConfig) splitParentChild() (parent.DEPSLocalGithubConfig, child.GitCheckoutConfig, error) {
 	var childDeps []*version_file_common.VersionFileConfig
 	if c.TransitiveDeps != nil {
 		childDeps = make([]*version_file_common.VersionFileConfig, 0, len(c.TransitiveDeps))
@@ -57,27 +59,33 @@ func (c GithubDEPSRepoManagerConfig) splitParentChild() (parent.DEPSLocalConfig,
 			childDeps = append(childDeps, dep.Child)
 		}
 	}
-	parentCfg := parent.DEPSLocalConfig{
-		GitCheckoutConfig: parent.GitCheckoutConfig{
-			GitCheckoutConfig: git_common.GitCheckoutConfig{
-				Branch:  c.DepotToolsRepoManagerConfig.CommonRepoManagerConfig.ParentBranch,
-				RepoURL: c.DepotToolsRepoManagerConfig.CommonRepoManagerConfig.ParentRepo,
-			},
-			DependencyConfig: version_file_common.DependencyConfig{
-				VersionFileConfig: version_file_common.VersionFileConfig{
-					ID:   c.ChildRepo,
-					Path: deps_parser.DepsFileName,
+	parentCfg := parent.DEPSLocalGithubConfig{
+		DEPSLocalConfig: parent.DEPSLocalConfig{
+			GitCheckoutConfig: parent.GitCheckoutConfig{
+				GitCheckoutConfig: git_common.GitCheckoutConfig{
+					Branch:  c.DepotToolsRepoManagerConfig.CommonRepoManagerConfig.ParentBranch,
+					RepoURL: c.DepotToolsRepoManagerConfig.CommonRepoManagerConfig.ParentRepo,
 				},
-				TransitiveDeps: c.TransitiveDeps,
+				DependencyConfig: version_file_common.DependencyConfig{
+					VersionFileConfig: version_file_common.VersionFileConfig{
+						ID:   c.ChildRepo,
+						Path: deps_parser.DepsFileName,
+					},
+					TransitiveDeps: c.TransitiveDeps,
+				},
 			},
+			CheckoutPath:   c.GithubParentPath,
+			ChildPath:      c.ChildPath,
+			ChildSubdir:    c.ChildSubdir,
+			GClientSpec:    c.GClientSpec,
+			PreUploadSteps: c.DepotToolsRepoManagerConfig.CommonRepoManagerConfig.PreUploadSteps,
+			RunHooks:       c.RunHooks,
 		},
-		CheckoutPath:   c.GithubParentPath,
-		GClientSpec:    c.GClientSpec,
-		PreUploadSteps: c.DepotToolsRepoManagerConfig.CommonRepoManagerConfig.PreUploadSteps,
-		RunHooks:       c.RunHooks,
+		GitHub:      c.GitHub,
+		ForkRepoURL: c.ForkRepoURL,
 	}
 	if err := parentCfg.Validate(); err != nil {
-		return parent.DEPSLocalConfig{}, child.GitCheckoutConfig{}, skerr.Wrapf(err, "generated parent config is invalid")
+		return parent.DEPSLocalGithubConfig{}, child.GitCheckoutConfig{}, skerr.Wrapf(err, "generated parent config is invalid")
 	}
 	childCfg := child.GitCheckoutConfig{
 		GitCheckoutConfig: git_common.GitCheckoutConfig{
@@ -88,9 +96,61 @@ func (c GithubDEPSRepoManagerConfig) splitParentChild() (parent.DEPSLocalConfig,
 		},
 	}
 	if err := childCfg.Validate(); err != nil {
-		return parent.DEPSLocalConfig{}, child.GitCheckoutConfig{}, skerr.Wrapf(err, "generated child config is invalid")
+		return parent.DEPSLocalGithubConfig{}, child.GitCheckoutConfig{}, skerr.Wrapf(err, "generated child config is invalid")
 	}
 	return parentCfg, childCfg, nil
+}
+
+// GithubDEPSRepoManagerConfigToProto converts a GithubDEPSRepoManagerConfig to
+// a config.ParentChildRepoManagerConfig.
+func GithubDEPSRepoManagerConfigToProto(cfg *GithubDEPSRepoManagerConfig) (*config.ParentChildRepoManagerConfig, error) {
+	parentCfg, childCfg, err := cfg.splitParentChild()
+	if err != nil {
+		return nil, skerr.Wrap(err)
+	}
+	return &config.ParentChildRepoManagerConfig{
+		Parent: &config.ParentChildRepoManagerConfig_DepsLocalGithubParent{
+			DepsLocalGithubParent: parent.DEPSLocalGithubConfigToProto(&parentCfg),
+		},
+		Child: &config.ParentChildRepoManagerConfig_GitCheckoutChild{
+			GitCheckoutChild: child.GitCheckoutConfigToProto(&childCfg),
+		},
+	}, nil
+}
+
+// ProtoToGithubDEPSRepoManagerConfig converts a
+// config.ParentChildRepoManagerConfig to a GithubDEPSRepoManagerConfig.
+func ProtoToGithubDEPSRepoManagerConfig(cfg *config.ParentChildRepoManagerConfig) (*GithubDEPSRepoManagerConfig, error) {
+	childCfg := cfg.GetGitCheckoutChild()
+	childBranch, err := config_vars.NewTemplate(childCfg.GitCheckout.Branch)
+	if err != nil {
+		return nil, skerr.Wrap(err)
+	}
+	parentCfg := cfg.GetDepsLocalGithubParent()
+	parentBranch, err := config_vars.NewTemplate(parentCfg.DepsLocal.GitCheckout.GitCheckout.Branch)
+	if err != nil {
+		return nil, skerr.Wrap(err)
+	}
+	return &GithubDEPSRepoManagerConfig{
+		DepotToolsRepoManagerConfig: DepotToolsRepoManagerConfig{
+			CommonRepoManagerConfig: CommonRepoManagerConfig{
+				ChildBranch:      childBranch,
+				ChildPath:        parentCfg.DepsLocal.ChildPath,
+				ParentBranch:     parentBranch,
+				ParentRepo:       parentCfg.DepsLocal.GitCheckout.GitCheckout.RepoUrl,
+				ChildRevLinkTmpl: childCfg.GitCheckout.RevLinkTmpl,
+				ChildSubdir:      parentCfg.DepsLocal.ChildSubdir,
+				PreUploadSteps:   parent.ProtoToPreUploadSteps(parentCfg.DepsLocal.PreUploadSteps),
+			},
+			GClientSpec: parentCfg.DepsLocal.GclientSpec,
+			RunHooks:    parentCfg.DepsLocal.RunHooks,
+		},
+		GitHub:           codereview.ProtoToGithubConfig(parentCfg.Github),
+		ChildRepo:        childCfg.GitCheckout.RepoUrl,
+		ForkRepoURL:      parentCfg.ForkRepoUrl,
+		GithubParentPath: parentCfg.DepsLocal.CheckoutPath,
+		TransitiveDeps:   version_file_common.ProtoToTransitiveDepConfigs(parentCfg.DepsLocal.GitCheckout.Dep.Transitive),
+	}, nil
 }
 
 // NewGithubDEPSRepoManager returns a RepoManager instance which operates in the given
@@ -103,17 +163,18 @@ func NewGithubDEPSRepoManager(ctx context.Context, c *GithubDEPSRepoManagerConfi
 	if err != nil {
 		return nil, skerr.Wrap(err)
 	}
-	uploadRoll := parent.GitCheckoutUploadGithubRollFunc(githubClient, cr.UserName(), rollerName, c.ForkRepoURL)
-	parentRM, err := parent.NewDEPSLocal(ctx, parentCfg, reg, client, serverURL, workdir, cr.UserName(), cr.UserEmail(), recipeCfgFile, uploadRoll)
+	// TODO(borenet): Move the following into parent.NewDEPSLocalGithub().
+	uploadRoll := parent.GitCheckoutUploadGithubRollFunc(githubClient, cr.UserName(), rollerName, parentCfg.ForkRepoURL)
+	parentRM, err := parent.NewDEPSLocal(ctx, parentCfg.DEPSLocalConfig, reg, client, serverURL, workdir, cr.UserName(), cr.UserEmail(), recipeCfgFile, uploadRoll)
 	if err != nil {
 		return nil, skerr.Wrap(err)
 	}
-	if err := github_common.SetupGithub(ctx, parentRM.Checkout.Checkout, c.ForkRepoURL); err != nil {
+	if err := github_common.SetupGithub(ctx, parentRM.Checkout.Checkout, parentCfg.ForkRepoURL); err != nil {
 		return nil, skerr.Wrap(err)
 	}
 
 	// Find the path to the child repo.
-	childPath := filepath.Join(workdir, c.ChildPath)
+	childPath := filepath.Join(workdir, parentCfg.ChildPath)
 	childCheckout := &git.Checkout{GitDir: git.GitDir(childPath)}
 	childRM, err := child.NewGitCheckout(ctx, childCfg, reg, workdir, cr.UserName(), cr.UserEmail(), childCheckout)
 	if err != nil {
