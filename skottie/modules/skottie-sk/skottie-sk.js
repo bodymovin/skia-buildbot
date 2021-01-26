@@ -101,7 +101,7 @@ const gifExporter = (ele) => {
   return html`
 <section class=editor>
   <skottie-gif-exporter
-    .player=${ele}
+    @start=${ele._onGifExportStart}
   >
   </skottie-gif-exporter>
 </section>`;
@@ -283,6 +283,7 @@ define('skottie-sk', class extends HTMLElement {
       this._height = newState.h;
       this._fps = newState.f;
       this._applyTextEdits = this._applyTextEdits.bind(this);
+      this._onGifExportStart = this._onGifExportStart.bind(this);
       this.render();
     });
 
@@ -349,6 +350,12 @@ define('skottie-sk', class extends HTMLElement {
     const animation = event.detail;
     this._state.lottie = animation;
     this._upload();
+  }
+
+  _onGifExportStart() {
+    if (this._playing) {
+      this._playpause();
+    }
   }
 
   _applyEdits() {
@@ -604,6 +611,11 @@ define('skottie-sk', class extends HTMLElement {
 
     this._skottiePlayer = $$('skottie-player-sk', this);
 
+    const skottieGifExporter = $$('skottie-gif-exporter', this);
+    if (skottieGifExporter) {
+      skottieGifExporter.player = this._skottiePlayer;
+    }
+
     if (this._ui === LOADED_MODE) {
       try {
         this._renderLottieWeb();
@@ -824,28 +836,6 @@ define('skottie-sk', class extends HTMLElement {
       this.render();
     }
 
-  }
-
-  duration() {
-    return this._skottiePlayer.duration();
-  }
-
-  fps() {
-    return this._skottiePlayer.fps();
-  }
-
-  getCanvasElement() {
-    return this._skottiePlayer.canvas();
-  }
-
-  seekFrame(position) {
-    this._skottiePlayer.seek(position);
-  }
-
-  pause() {
-    if(this._playing) {
-      this._playpause()
-    }
   }
 
 });

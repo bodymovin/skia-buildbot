@@ -175,6 +175,7 @@ define('skottie-player-sk', class extends HTMLElement {
     this._config.width = config.width;
     this._config.height = config.height;
     this._config.fps = config.fps;
+    this._animationName = config.lottie.nm;
 
     this._render();
     return canvasReady.then((ck) => {
@@ -194,6 +195,10 @@ define('skottie-player-sk', class extends HTMLElement {
 
   fps() {
     return this._state.nativeFps;
+  }
+
+  animationName() {
+    return this._animationName;
   }
 
   canvas() {
